@@ -1,0 +1,23 @@
+<?php
+
+/*
+ * Impementation of hook_install()
+ */
+function drippic_install() {
+  drippic_create_content_type(drupal_get_path('module', 'drippic').'/drippic.cck.inc');
+}
+
+/*
+ * Helper function to import a content type
+ */
+function drippic_create_content_type($cck_definition_file) {
+  include_once('./'. drupal_get_path('module', 'node') .'/content_types.inc');
+  include_once('./'. drupal_get_path('module', 'content') .'/includes/content.admin.inc');
+  $values = array();
+  $values['type_name'] = '<create>';
+  $values['macro'] = file_get_contents($cck_definition_file);
+  $form_state = array();
+  $form_state['values'] = $values;
+  drupal_execute("content_copy_import_form", $form_state);
+}
+?>

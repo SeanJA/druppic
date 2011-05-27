@@ -1,0 +1,101 @@
+<?php
+// $Id: piwik_basic.test,v 1.3.2.8 2011/01/30 14:13:28 hass Exp $
+
+/**
+ * @file
+ * Test file for Piwik module.
+ */
+class PiwikBasicTest extends DrupalWebTestCase {
+
+  public static function getInfo() {
+    return array(
+      'name' => t('Piwik basic tests'),
+      'desc' => t('Test basic Piwik module functionality.'),
+      'group' => 'Piwik',
+    );
+  }
+
+  public function setUp() {
+    parent::setUp('piwik');
+
+    $permissions = array('administer piwik');
+
+    // User to set up google_analytics.
+    $user = $this->drupalCreateUser($permissions);
+    $this->drupalLogin($user);
+  }
+
+  public function testPiwik() {
+    // Check for setting page's presence.
+    $this->drupalGet('admin/settings/piwik');
+    $this->assertRaw(t('Piwik site ID'), "[testPiwik]: Settings page displayed.");
+
+    // Check for account code validation.
+    $edit['piwik_site_id'] = $this->randomName(2);
+    $this->drupalPost('admin/settings/piwik', $edit, 'Save configuration');
+    $this->assertRaw(t('A valid Piwik site ID is an integer only.'), "[testPiwik]: Account number validated.");
+  }
+
+  public function testPiwikTracking() {
+    // Set visibility to hide tracking code on admin page only,
+    // track authenticated users.
+    variable_set('piwik_visibility', 0);
+    variable_set('piwik_pages', "admin*");
+    variable_set('piwik_roles', array(DRUPAL_AUTHENTICATED_RID => DRUPAL_AUTHENTICATED_RID));
+    $ua_code = '1';
+    variable_set('piwik_site_id', $ua_code);
+    variable_get('piwik_url_http', 'http://example.com/piwik/');
+    variable_get('piwik_url_https', 'https://example.com/piwik/');
+
+    // Check tracking code visibility.
+    $this->drupalGet('');
+    $this->assertRaw('u+"piwik.php"', '[testPiwikTracking]: Tracking code is displayed for authenticated.');
+
+    /* Sample JS code as added to page:
+    <script type="text/javascript">
+    var _paq = _paq || [];
+    (function(){
+        var u=(("https:" == document.location.protocol) ? "https://{$PIWIK_URL}" : "http://{$PIWIK_URL}");
+        _paq.push(['setSiteId', {$IDSITE}]);
+        _paq.push(['setTrackerUrl', u+'piwik.php']);
+        _paq.push(['trackPageView']);
+        var d=document,
+            g=d.createElement('script'),
+            s=d.getElementsByTagName('script')[0];
+            g.type='text/javascript';
+            g.defer=true;
+            g.async=true;
+            g.src=u+'piwik.js';
+            s.parentNode.insertBefore(g,s);
+    })();
+    </script>
+    */
+
+    // Test whether tracking code uses latest JS.
+    $this->drupalGet('');
+    $this->assertRaw('_paq.push(["setTrackerUrl", u+"piwik.php"]);', '[testPiwikTracking]: Latest async tracking code used.');
+
+    // Test whether tracking code is not included on pages to omit.
+    $this->drupalGet('admin');
+    $this->assertNoRaw('u+"piwik.php"', '[testPiwikTracking]: Tracking code is not displayed on admin page.');
+    $this->drupalGet('admin/settings/piwik');
+    // Checking for tracking code URI here, as $ua_code is displayed in the form.
+    $this->assertNoRaw('u+"piwik.php"', '[testPiwikTracking]: Tracking code is not displayed on admin subpage.');
+
+    // Test whether tracking code display is properly flipped.
+    variable_set('piwik_visibility', 1);
+    $this->drupalGet('admin');
+    $this->assertRaw('u+"piwik.php"', '[testPiwikTracking]: Tracking code is displayed on admin page.');
+    $this->drupalGet('admin/settings/piwik');
+    // Checking for tracking code URI here, as $ua_code is displayed in the form.
+    $this->assertRaw('u+"piwik.php"', '[testPiwikTracking]: Tracking code is displayed on admin subpage.');
+    $this->drupalGet('');
+    $this->assertNoRaw('u+"piwik.php"', '[testPiwikTracking]: Tracking code is not displayed on front page.');
+
+    // Test whether tracking code is not display for anonymous.
+    $this->drupalLogout();
+    $this->drupalGet('');
+    $this->assertNoRaw('u+"piwik.php"', '[testPiwikTracking]: Tracking code is not displayed for anonymous.');
+  }
+
+}

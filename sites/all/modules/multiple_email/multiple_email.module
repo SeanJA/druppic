@@ -1,0 +1,805 @@
+<?php
+// $Id: multiple_email.module,v 1.1.4.34 2011/02/21 02:01:40 shawndearmond Exp $
+
+/**
+ * @file
+ * multiple_email module file
+ */
+
+/**
+ * Implementation of hook_help().
+ */
+function multiple_email_help($section, $arg) {
+  switch ($section) {
+    case 'admin/help#multiple_email':
+    case 'admin/help/multiple_email':
+      $path = drupal_get_path('module', 'multiple_email') . "/README.txt";
+      return filter_filter('process', 2, NULL, file_get_contents($path));
+  }
+}
+
+/**
+ * Implementation of hook_perm().
+ *
+ */
+function multiple_email_perm() {
+  return array('use multiple emails');
+}
+
+/**
+ * Implementation of hook_menu().
+ *
+ * @param boolean $may_cache
+ *
+ * @return array
+ */
+function multiple_email_menu() {
+  $items = array();
+
+  $items['admin/settings/multiple-email'] = array(
+    'title' => t('Multiple E-mail Settings'),
+    'description' => t('Control behavior of the Multiple E-mail Addresses module'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('multiple_email_admin_settings'),
+    'access arguments' => array('administer users'),
+  );
+
+  $items['user/%user/edit/email-addresses/view'] = array(
+    'title' => t('View E-mail Addresses'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('multiple_email_manage', 1),
+    'access callback' => '_multiple_email_access',
+    'access arguments' => array('pages', 1),
+    'file' => 'multiple_email_manage.inc',
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+  );
+
+  $items['user/%user/edit/email-addresses/confirm/%multiple_email'] = array(
+    'title' => t('Confirm E-mail Address'),
+    'page callback' => 'multiple_email_confirm_page',
+    'page arguments' => array(1, 5),
+    'access callback' => TRUE,
+    'file' => 'multiple_email_confirm_page.inc',
+    'type' => MENU_CALLBACK,
+  );
+
+  $items['user/%user/edit/email-addresses/confirm/%multiple_email/resend'] = array(
+    'title' => t('Confirm E-mail Address'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('multiple_email_confirm_page_resend', 1, 5),
+    'access callback' => '_multiple_email_access',
+    'access arguments' => array('confirm', 1, 5),
+    'file' => 'multiple_email_confirm_page.inc',
+    'type' => MENU_CALLBACK,
+  );
+
+  $items['user/%user/edit/email-addresses/primary/%multiple_email'] = array(
+    'title' => t('Make E-mail Primary Address'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('multiple_email_primary_form', 1, 5),
+    'access callback' => '_multiple_email_access',
+    'access arguments' => array('primary', 1, 5),
+    'file' => 'multiple_email_primary_page.inc',
+    'type' => MENU_CALLBACK,
+  );
+
+  $items['user/%user/edit/email-addresses/edit/%multiple_email'] = array(
+    'title' => t('Edit E-mail Address'),
+    'page callback' => 'multiple_email_edit_page',
+    'page arguments' => array(1, 5),
+    'access callback' => '_multiple_email_access',
+    'access arguments' => array('edit', 1, 5),
+    'file' => 'multiple_email_edit_page.inc',
+    'type' => MENU_CALLBACK,
+  );
+
+  $items['user/%user/edit/email-addresses/delete/%multiple_email'] = array(
+    'title' => t('Delete E-mail Address'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('multiple_email_delete_form', 1, 5),
+    'access callback' => '_multiple_email_access',
+    'access arguments' => array('delete', 1, 5),
+    'file' => 'multiple_email_delete_page.inc',
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+function _multiple_email_access($op, $account, $email = NULL) {
+  global $user;
+  $administer_user = user_access('administer users');
+  // Basic permission check to access any page.
+  // If the account does not have access to use multiple emails, return false
+  // If the account does not belong to the current user and the user does not
+  // have administer users permission, return false
+  if (!user_access('use multiple emails', $account) || ($account->uid != $user->uid && !$administer_user)) {
+    return FALSE;
+  }
+
+  // If we have been given an e-mail address, make sure it belongs to the loaded
+  // account. Since Drupal will fail earlier if multiple_email_load fails, this
+  // is sufficient.
+  if (!empty($email) && $email->uid != $account->uid ) {
+    return FALSE;
+  }
+
+  switch ($op) {
+    case 'pages':
+    case 'confirm':
+      // The above checks are sufficent for these operations.
+      return TRUE;
+
+    case 'primary':
+      // This page only makes sense if the e-mail isn't already the primary
+      // address and the e-mail is confirmed(or this is an admin).
+      if ($email->primary_address == 0 && ($email->confirmed == 1 || $administer_user)) {
+        return TRUE;
+      }
+      break;
+
+    case 'edit':
+      // Administrators should always be able to manage a user.
+      if ($administer_user) {
+        return TRUE;
+      }
+      // Make sure this isn't the primary e-mail and the edit emails flag is enabled.
+      if ($email->primary_address == 0 && variable_get('multiple_email_edit_emails', 0)) {
+        return TRUE;
+      }
+      break;
+
+    case 'delete':
+      if ($email->primary_address == 0) {
+        return TRUE;
+      }
+      break;
+
+  }
+  return FALSE;
+}
+
+/**
+ * Implementation of hook_menu_alter().
+ *
+ * Actual menu entry is defined by hook_user category op.
+ * @see multiple_email_user()
+ */
+function multiple_email_menu_alter(&$items) {
+  if (!empty($items['user/%user_category/edit/email-addresses'])) {
+    $items['user/%user_category/edit/email-addresses'] = array(
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('multiple_email_manage', 1),
+      'access callback' => '_multiple_email_access',
+      'access arguments' => array('pages', 1),
+      'file' => 'multiple_email_manage.inc',
+      'file path' => drupal_get_path('module', 'multiple_email'),
+    ) + $items['user/%user_category/edit/email-addresses'];
+  }
+}
+
+/**
+ * Implementation of hook_user().
+ *
+ * @param string $op
+ * @param array $edit
+ * @param object $account
+ * @param string $category
+ *
+ * @return mixed
+ */
+function multiple_email_user($op, &$edit, &$account, $category = NULL) {
+  switch ($op) {
+    case 'categories':
+      return array(array('name' => 'email-addresses', 'title' => 'E-mail addresses', 'weight' => 100));
+
+    case 'form':
+      if ($category == 'email-addresses') {
+        $form = array();
+        return $form;
+      }
+      break;
+
+    case 'insert':
+      // add the new e-mail address into the Multiple E-mails section.
+      $eid = multiple_email_register_email($account->uid, $account->mail, TRUE);
+      break;
+
+    case 'delete':
+      // delete Multiple E-mails from the deleting user.
+      db_query("DELETE FROM {multiple_email} WHERE uid = %d", $account->uid);
+      break;
+
+    case 'validate':
+      if (!empty($edit['mail'])) {
+        $mail = multiple_email_find_address($edit['mail']);
+        // If this is an email
+        if (!empty($mail)
+          // If this is not a primary email. Primary e-mail is checked by core.
+          && empty($mail->primary_address)
+          // If annoymous or mail isn't current user.
+          && (empty($account->uid) || $account->uid != $mail->uid)
+        ) {
+          form_set_error('mail', t('The e-mail address %email is already registered. <a href="@password">Have you forgotten your password?</a>', array('%email' => $edit['mail'], '@password' => url('user/password'))));
+        }
+      }
+      break;
+
+    case 'after_update':
+      if (!empty($edit['mail'])) {
+        $object = multiple_email_find_address($edit['mail']);
+        // add this to multiple email
+        if (empty($object)) {
+          // If an administer is making a change or user doesn't have
+          // multiple emails permission, mark as confirmed.
+          $confirmed = user_access('adminster users') || !user_access('use multiple emails', $account);
+          // confirm if action done by administer
+          $eid = multiple_email_register_email($account->uid, $edit['mail'], $confirmed);
+          if (empty($confirmed) && !empty($eid)) {
+            multiple_email_send_confirmation($account, $edit['mail']);
+          }
+        }
+      }
+      break;
+  }
+}
+
+/**
+ * Implementation of hook_theme().
+ */
+function multiple_email_theme() {
+  return array(
+    'multiple_email_manage' => array(
+      'arguments' => array('form' => NULL),
+      'file' => 'multiple_email_manage.inc',
+    ),
+  );
+}
+
+/**
+ * Implementation of hook_form_FORM_ID_alter().
+ *
+ * Remove e-mail field from profile edit for privileged users.
+ * This will be done in address management screen instead.
+ */
+function multiple_email_form_user_profile_form_alter(&$form, $form_state) {
+  // Disable e-mail address field on main user/edit form when user has 'use multiple emails' access.
+  if (user_access('use multiple emails', $form['_account']['#value']) &&
+      variable_get('multiple_email_hide_field', TRUE)) {
+    $form['account']['mail']['#disabled'] = TRUE;
+    $form['account']['mail']['#required'] = FALSE;
+    $form['account']['mail']['#value'] = $form['account']['mail']['#default_value'];
+    $form['account']['mail']['#description'] = t('E-mail addresses are managed on the !multiple_email tab.', array('!multiple_email' => l(t('E-mail addresses'), 'user/'. $form['#uid'] .'/edit/email-addresses')));
+  }
+}
+
+/**
+ * Implementation of hook_cron().
+ */
+function multiple_email_cron() {
+  $deadline = (int)variable_get('multiple_email_confirm_deadline', 5);
+  if ($deadline) {
+    $result = db_query("
+      SELECT
+        e.eid,
+        e.time_code_generated,
+        IF(LOWER(u.mail) = LOWER(e.email), 1, 0) as primary_address
+      FROM
+        {multiple_email} e
+        INNER JOIN {users} u ON (u.uid = e.uid)
+      WHERE confirmed=0");
+    $now = time();
+    while ($row = db_fetch_object($result)) {
+      if (strtotime("+$deadline days", $row->time_code_generated) <= $now && !$row->primary_address) {
+        multiple_email_expire_address($row->eid);
+      }
+    }
+  }
+}
+
+/**
+ * Settings form for site configuration section.
+ *
+ * @ingroup forms
+ */
+function multiple_email_admin_settings() {
+  $form['multiple_email_hide_field'] = array(
+    '#type' => 'select',
+    '#title' => t('Hide E-mail Field'),
+    '#description' => t('Hides the e-mail field when editing a user'),
+    '#options' => array('No', 'Yes'),
+    '#default_value' => variable_get('multiple_email_hide_field', 1),
+  );
+  $form['multiple_email_edit_emails'] = array(
+    '#type' => 'select',
+    '#title' => t('Allow editing of emails'),
+    '#description' => t('Allows editing of e-mail addresses. It is equivalent to deleting and adding a new e-mail address, as edited emails must be re-confirmed. If enabled, e-mail addresses (excluding primary) may be edited via the multiple e-mail tab.'),
+    '#options' => array('No', 'Yes'),
+    '#default_value' => variable_get('multiple_email_edit_emails', 0),
+  );
+  $form['multiple_email_confirm_attempts'] = array(
+    '#type' => 'textfield',
+    '#size' => 4,
+    '#title' => t('Confirm Attempts'),
+    '#description' => t('How many times a user enters a confirmation code before a new one is generated. If set to 0, no new codes are sent after the first one.'),
+    '#default_value' => variable_get('multiple_email_confirm_attempts', 3),
+  );
+  $form['multiple_email_confirm_deadline'] = array(
+    '#type' => 'textfield',
+    '#size' => 4,
+    '#title' => t('Confirm Days'),
+    '#description' => t('How many days a user has to enter a confirmation code. If 0, emails pending confirmation do not expire.'),
+    '#default_value' => variable_get('multiple_email_confirm_deadline', 5),
+  );
+  $vars = '!username, !site, !email, !confirm_code, !confirm_url, !confirm_deadline';
+  $form['multiple_email_confirmation_subject'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Confirmation E-mail Subject'),
+    '#description' => t('Customize the subject of the message to be sent when a user adds a new e-mail to their account.') . '<br/>' . t('Available variables are:') . $vars,
+    '#default_value' => variable_get('multiple_email_confirmation_subject', multiple_email_default_subject('confirmation')),
+  );
+  $form['multiple_email_confirmation_body'] = array(
+    '#type' => 'textarea',
+    '#title' => t('Confirmation E-mail Body'),
+    '#description' => t('Customize the body of the message to be sent when a user adds a new e-mail to their account.') . '<br/>' . t('Available variables are:') . $vars,
+    '#default_value' => variable_get('multiple_email_confirmation_body', multiple_email_default_body('confirmation')),
+  );
+  $form['multiple_email_expire_subject'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Expire E-mail Subject'),
+    '#description' => t('Customize the subject of the message to be sent when an unconfirmed e-mail address expires.') . '<br/>' . t('Available variables are:') . $vars,
+    '#default_value' => variable_get('multiple_email_expire_subject', multiple_email_default_subject('expire')),
+  );
+  $form['multiple_email_expire_body'] = array(
+    '#type' => 'textarea',
+    '#title' => t('Expire E-mail Body'),
+    '#description' => t('Customize the body of the message to be sent when an unconfirmed e-mail address expires.') . '<br/>' . t('Available variables are:') . $vars,
+    '#default_value' => variable_get('multiple_email_expire_body', multiple_email_default_body('expire')),
+  );
+
+  return system_settings_form($form);
+}
+
+/**
+ * Validation for multiple_email_admin_settings.
+ *
+ * @param string $form_id
+ * @param array $form_values
+ */
+function multiple_email_admin_settings_validate($form, &$form_state) {
+  if (!is_numeric($form_state['values']['multiple_email_confirm_attempts'])) {
+    form_set_error('multiple_email_confirm_attempts', 'Confirm attempts must be an number!');
+  }
+  if (!is_numeric($form_state['values']['multiple_email_confirm_deadline'])) {
+    form_set_error('multiple_email_confirm_deadline', 'Confirm Days must be an number!');
+  }
+}
+
+/**
+ * Returns an array of information about the specified user's associated email
+ * addresses.
+ *
+ * Index 0 contains an associative array of all the addresses in
+ * eid=>addresses format. Subsequent indexes are the eid of the address,
+ * then an object of properties corresponding to columns in the table.
+ *
+ * @param integer $uid
+ * @param array $tablesortHeaders
+ *
+ * @return array
+ */
+function multiple_email_load_addresses($uid, $tablesortHeaders = NULL) {
+  $addresses = array();
+  $results = db_query("
+    SELECT
+      a.eid,
+      a.uid,
+      a.email,
+      a.time_registered,
+      a.confirmed,
+      a.confirm_code,
+      a.time_code_generated,
+      a.attempts,
+      IF(LOWER(a.email) = LOWER(u.mail), 1, 0) AS primary_address
+    FROM
+      {multiple_email} a
+    INNER JOIN {users} u ON (u.uid = a.uid)
+    WHERE
+      a.uid = %d"
+      . ($tablesortHeaders ? ' ' . tablesort_sql($tablesortHeaders) : ''),
+    $uid
+  );
+
+  while ($row = db_fetch_object($results)) {
+    $addresses[0][] = $row->email;
+    $addresses[$row->eid] = $row;
+  }
+
+  return $addresses;
+}
+
+/**
+ * Loads a single address from the e-mail registry and returns it as an object.
+ *
+ * @param integer $eid
+ * @param integer $reset
+ *
+ * @return object
+ */
+function multiple_email_load($eid, $reset = FALSE) {
+  static $emails = array();
+  if (!empty($reset)) {
+    $emails = array();
+  }
+  if (!empty($eid) && empty($emails[$eid])) {
+    $emails[$eid] = db_fetch_object(db_query("
+      SELECT
+        a.eid,
+        a.uid,
+        a.email,
+        a.time_registered,
+        a.time_registered,
+        a.confirmed,
+        a.confirm_code,
+        a.time_code_generated,
+        a.attempts,
+        IF(LOWER(a.email) = LOWER(u.mail), 1, 0) AS primary_address
+      FROM
+        {multiple_email} a
+      INNER JOIN {users} u ON (u.uid = a.uid)
+      WHERE
+        a.eid = %d",
+      $eid
+    ));
+  }
+  return !empty($eid) && !empty($emails[$eid]) ? $emails[$eid] : FALSE;
+}
+
+/**
+ * Wrapper around multiple_email_load
+ * Depracted function.
+ */
+function multiple_email_get_address($eid) {
+  return multiple_email_load($eid);
+}
+
+
+/**
+ * Finds the specified e-mail and returns an object containing its data.
+ * Returns false if e-mail cannot be found.
+ *
+ * @param string $email
+ *
+ * @return mixed
+ */
+function multiple_email_find_address($email) {
+  $eid = db_result(db_query("SELECT eid FROM {multiple_email} WHERE LOWER(email) = LOWER('%s')", $email));
+  if ($eid) {
+    return multiple_email_load($eid);
+  }
+  return FALSE;
+}
+
+/**
+ * Adds an unconfirmed e-mail address to the e-mail registry.
+ *
+ * If you specify the 3rd parameter to be true, the e-mail address will be
+ * recorded as having been confirmed.
+ *
+ * Returns the email's eid on success, false on failure.
+ *
+ * @param integer $uid
+ * @param string $email
+ * @param boolean $confirmed
+ *
+ * @return mixed
+ */
+function multiple_email_register_email($uid, $email, $confirmed = FALSE, $eid = NULL) {
+  if ($eid) {
+    $success = db_query("
+      UPDATE {multiple_email}
+      SET
+        email = '%s',
+        time_registered = %d,
+        confirmed = %d,
+        confirm_code = '%s',
+        time_code_generated = %d
+      WHERE
+        eid = %d",
+      $email,
+      time(),
+      (int)$confirmed,
+      $code = multiple_email_code(),
+      time(),
+      $eid
+    );
+  }
+  else {
+    $success = db_query("
+      INSERT INTO {multiple_email}
+        (`uid`,`email`,`time_registered`,`confirmed`,`confirm_code`,`time_code_generated`)
+      VALUES
+        (%d, '%s', %d, %d, '%s', %d)",
+      $uid,
+      $email,
+      time(),
+      (int)$confirmed,
+      $code = multiple_email_code(),
+      time()
+    );
+  }
+
+  if ($success !== FALSE) {
+    if (!$eid) {
+      $eid = db_last_insert_id('multiple_email', 'eid');
+    }
+    $email = multiple_email_load($eid, TRUE);
+    // Fires off hook_multiple_email_register().
+    module_invoke_all('multiple_email_register', $email);
+    return $eid;
+  }
+  else {
+    return FALSE;
+  }
+}
+
+/**
+ * Marks an e-mail address as confirmed in the e-mail registry
+ *
+ * @param object $email E-mail row object to confirm
+ * @param bool $confirm Defaults to TRUE
+ *
+ * @return void
+ */
+function multiple_email_confirm_email($email, $confirm = TRUE) {
+  $confirm = $confirm ? 1 : 0;
+  watchdog('Multiple E-mail', 'Marking address %email confirmed for user !uid',
+    array('%email' => $email->email, '!uid' => $email->uid),
+    l(t('edit'), "user/$email->uid"));
+  db_query("
+    UPDATE {multiple_email} SET
+      confirmed = %d
+    WHERE
+      eid = %d",
+    $confirm, $email->eid
+  );
+  $email->confirmed = $confirm;
+  multiple_email_load(FALSE, TRUE);
+  // Fires off hook_multiple_email_confirm().
+  module_invoke_all('multiple_email_confirm', $email);
+}
+
+/**
+ * Generates a random string of given length from given characters.
+ *
+ * If no characters are specified, then it uses a-zA-Z0-9. Characters are
+ * specified as a string containing every valid character. Duplicates will
+ * (in theory) increase that character's chances of occurring in the random
+ * string.
+ *
+ * @param integer $length Length of the random code. Defaults to 10 characters.
+ * @param string $chars
+ *
+ * @return string
+ */
+function multiple_email_code($length = 10, $chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUBWXYZ0123456789') {
+  $cl = drupal_strlen($chars) - 1;
+  $out = '';
+  for ($i = 0; $i < $length; $i++) {
+    $out .= $chars[mt_rand(0, $cl)];
+  }
+  return $out;
+}
+
+/**
+ * Deletes specified e-mail from registry - no error checking!
+ *
+ * @param integer $eid
+ *
+ * @return mixed
+ */
+function multiple_email_delete_email($eid) {
+  multiple_email_load(NULL, TRUE);
+  $retn = db_query("DELETE FROM {multiple_email} WHERE eid = %d", $eid);
+  if ($retn !== FALSE) {
+    module_invoke_all('multiple_email_delete', $eid);
+  }
+  return $retn;
+}
+
+/**
+ * Changes specified user's primary e-mail - no error checking!
+ *
+ * @param object $account
+ * @param object $email
+ */
+function multiple_email_make_primary($email) {
+  $account = new stdClass();
+  $account->uid = $email->uid;
+  user_save($account, array('mail' => $email->email));
+  multiple_email_load(NULL, TRUE);
+}
+
+/**
+ * Sends the confirmation e-mail for the specified address to the specified
+ * user account.
+ *
+ * @param object $account
+ * @param object $email
+ */
+function multiple_email_send_confirmation($account, $email) {
+  global $language;
+
+  $params = array(
+    'headers' => array(),
+    'subject' => multiple_email_message_part('subject', 'confirmation', $account, $email),
+    'body' => multiple_email_message_part('body', 'confirmation', $account, $email),
+  );
+
+  $from = variable_get('site_mail', ini_get('sendmail_from'));
+  drupal_mail('multiple_email', 'confirmation', $email->email, $language, $params, $from);
+}
+
+function multiple_email_mail($key, &$message, $params) {
+
+  switch ($key) {
+    case 'confirmation':
+      $message['subject'] = $params['subject'];
+      $message['body'][] = $params['body'];
+      $message['headers'] = array_merge($message['headers'], $params['headers']);
+      break;
+  }
+}
+
+/**
+ * Removes the specified address from the user who added it and sends their
+ * primary e-mail account a message notifying them about the expiration.
+ *
+ * @param integer $eid
+ */
+function multiple_email_expire_address($eid) {
+  global $language;
+
+  $email = multiple_email_load($eid);
+  $account = user_load(array('uid' => $email->uid));
+  $params = array(
+    'subject' => multiple_email_message_part('subject', 'expire', $account, $email),
+    'body' => multiple_email_message_part('body', 'expire', $account, $email),
+  );
+
+  multiple_email_delete_email($eid);
+  $from = variable_get('site_mail', ini_get('sendmail_from'));
+
+  drupal_mail('multiple_email_expire', 'expire_address_mail', $account->mail, $language, $params, $from);
+  watchdog('Multiple E-mail', '@email (@eid) for @name (@uid) has expired and been removed',
+    array('@email' => $email->email, '@eid' => $email->eid, '@name' => $account->name, '@uid' => $account->uid));
+}
+
+function multiple_email_expire_address_mail($key, &$message, $params) {
+  $message['subject'] = $params['subject'];
+  $message['body'][] = $params['body'];
+  $message['headers'] = array_merge($message['headers'], $params['headers']);
+}
+
+/**
+ * Returns the part of the specified e-mail message based on site settings.
+ *
+ * @param string $part (subject or body)
+ * @param string $type
+ * @param object $account
+ * @param object $email
+ *
+ * @return string
+ */
+function multiple_email_message_part($part, $type, $account, $email) {
+  $func = "multiple_email_default_{$part}";
+  $setting = variable_get("multiple_email_{$type}_{$part}", $func($type));
+  return multiple_email_var_replace($setting, $account, $email);
+}
+
+/**
+ * Returns the module's default subject for the specified message type.
+ *
+ * @param string $type
+ *
+ * @return string
+ */
+function multiple_email_default_subject($type) {
+  $subjects = array(
+    'confirmation' => 'Confirm your e-mail address at !site',
+    'expire' => 'Your e-mail address at !site has expired',
+  );
+  return $subjects[$type];
+}
+
+/**
+ * Returns the module's default message for the specified message type
+ *
+ * @param string $type
+ *
+ * @return string
+ */
+function multiple_email_default_body($type) {
+  $func = "multiple_email_default_{$type}_body";
+  return $func();
+}
+
+/**
+ * Replaces various tokens with their value
+ *
+ * Valid tokens:
+ * !username (User's username)
+ * !site (Site's name)
+ * !email (E-mail address in question)
+ * !confirm_code (E-mail's confirmation code)
+ * !confirm_url (URL to confirmation page for address)
+ * !confirm_deadline (Human-readable time within which to confirm)
+ *
+ * @param string $text
+ * @param object $account
+ * @param object $email
+ *
+ * @return string
+ */
+function multiple_email_var_replace($text, $account, $email) {
+  $deadline = variable_get('multiple_email_confirm_deadline', 5);
+  $vars = array(
+    '!username' => $account->name,
+    '!email' => $email->email,
+    '!site' => variable_get('site_name', 'our web site'),
+    '!confirm_code' => $email->confirm_code,
+    '!confirm_url' => url('user/' . $email->uid . '/edit/email-addresses/confirm/' . $email->eid . '/' . $email->confirm_code, array('absolute' => TRUE)),
+    '!confirm_deadline' => ($deadline ? format_plural($deadline, t('1 day'), t('@days days', array('@days' => $deadline))) : t('unlimited days')),
+  );
+  return str_ireplace(array_keys($vars), array_values($vars), $text);
+}
+
+/**
+ * Returns the default confirmation message for use upon installation or if
+ * for some reason the variable doesn't exist.
+ *
+ * @return string
+ */
+function multiple_email_default_confirmation_body() {
+  $message = <<<END_MESSAGE
+!username,
+
+You have added the e-mail address '!email' to your account at !site. In order to complete the registration of this email, you must confirm it by clicking the link below and entering this confirmation code: !confirm_code
+
+!confirm_url
+
+If the web address does not appear as a link, you must copy the address out of this email, and paste it into the address bar of your web browser.
+
+If you do not confirm this e-mail in !confirm_deadline, it will be unregistered from your account.
+END_MESSAGE;
+
+  return $message;
+}
+
+/**
+ * Returns the default message sent to a user when they have failed to confirm
+ * an e-mail address within the deadline.
+ *
+ * @return string
+ */
+function multiple_email_default_expire_body() {
+  $message = <<<END_MESSAGE
+!username,
+
+You have failed to confirm the the e-mail address '!email' within the confirmation period of !confirm_deadline. Therefore, the e-mail address has been removed from your account.
+
+You may add this address again, but you must confirm the address within the specified deadline!
+END_MESSAGE;
+
+  return $message;
+}
+
+/*
+ * Implements hook_views_api
+ */
+function multiple_email_views_api() {
+  return array(
+    'api' => 2,
+    'path' => drupal_get_path('module', 'multiple_email') . '/views',
+  );
+}

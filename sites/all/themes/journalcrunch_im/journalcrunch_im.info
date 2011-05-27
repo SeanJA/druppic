@@ -1,0 +1,23 @@
+name = journalcrunch_im
+description = Theme based on Journal Crunch Worpress template
+version = VERSION
+core = 6.x
+engine = phptemplate
+
+regions[header] = Header
+regions[content] = Content
+regions[sidebar] = Sidebar
+regions[footer_first] = First Footer Block Area
+regions[footer_second] = Second Footer Block Area
+regions[footer_third] = Third Footer Block Area
+regions[footer_fourth] = Fourth Footer Block Area
+
+stylesheets[all][] = css/style.css
+
+scripts[] = js/jquery.fancybox.1.3.4.min.js
+scripts[] = js/upgrade_notification.min.js
+scripts[] = js/script.js
+
+version = "6.x-1.0"
+core = "6.x"
+project = "journalcrunch_im"
