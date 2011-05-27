@@ -6,7 +6,7 @@ Install
 * The dump.sql file in the dump folder is a starting point for now
   1. Change the values that have "changeme" in them
   2. Import the database, change settings.php to reflect your database settings
-  3. The default password is "password", since drupal doesn't do anything other than md5, you can safely generate a new one and put it in the password box
+  3. The default password is "password", since drupal doesn't do anything other than md5, you can safely generate a new one and put it in the password field for user id = 1
 
 Modules enabled, not sure if they are actually all in use at the moment
 ----
